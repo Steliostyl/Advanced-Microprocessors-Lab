@@ -1,68 +1,88 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
-#define right_wheel = PORTD.PIN0_bm
-#define left_wheel = PORTD.PIN1_bm
-#define standby_led = PORTD.PIN2_bm
-#define standard_freq = 1
+#define STD_PER 127
 
 int turning = 0;
+int tca0_int_cnt = 0;
 
-int main(){
-	PORTD.DIR |= PIN1_bm; // PIN is output
-	initialize_TCA();	// Initialize TCA0 for PWM mode
-	initialize_ADC();	// Initialize ADC for Free Running Mode
-	sei();
-	while(1){
-		
+void stop_moving(){
+	TCA0.SINGLE.CNT = 0;		// Clear counter
+	PORTD.OUT |= 8;				// Turn on standby LED
+}
+
+void turn(int direction){
+	if(turning==1){
+		// Stop turning
+		turning = 0;
+		return;
+	}
+	turning = 1;
+	// Start turning right
+	if(direction==1){
+		initialize_TCA(STD_PER*2);
+		initialize_TCB(STD_PER);
+	}
+	// Start turning left
+	else{
+		initialize_TCA(STD_PER);
+		initialize_TCB(STD_PER*2);
 	}
 }
 
 // Counter Overflow ISR
 ISR(TCA0_OVF_vect){
+	tca0_int_cnt ++ ;
 	// Clear the interrupt flag
 	int intflags = TCA0.SINGLE.INTFLAGS;
 	TCA0.SINGLE.INTFLAGS = intflags;
-	PORTD.OUT |= PIN1_bm; // PIN is on
-}
-
-// Counter ISR
-ISR(TCA0_CMP0_vect){
-	// Clear the interrupt flag
-	int intflags = TCA0.SINGLE.INTFLAGS;
-	TCA0.SINGLE.INTFLAGS = intflags;
-	PORTD.OUTCLR |= PIN1_bm; // PIN is off
+	if(tca0_int_cnt % 2 == 0)
+		PORTD.OUTCLR = 1;	// Turn LED 0 on
+	else
+		PORTD.OUTSET = 1;	// Turn LED 0 off 
+	TCA0.SINGLE.CNT = 0;	// Clear counter
 }
 
 // ADC ISR
 ISR(ADC0_WCOMP_vect){
 	int intflags = ADC0.INTFLAGS;
 	ADC0.INTFLAGS = intflags;
-	stop_moving();
+	// Stop moving
+	TCA0.SINGLE.CNT = 0;		// Clear counter
+	PORTD.OUT |= 8;				// Turn on standby LED
 }
 
 // Switch ISR
 ISR (PORTF_PORT_vect){
+	// If the standby led (LED 2 or 3rd bit of PORTD.OUT) 
+	// is not on, don't do anything
+	if(PORTD.OUT / 7 % 2)
+		break;
 	int intflags = PORTF.INTFLAGS;
 	PORTF.INTFLAGS = intflags;
 	
-	// Is 1 only when bit 5 = 1 (otherwise it's 0)
 	turn(PORTF.INTFLAGS / 16 % 2);
 }
 
 
-void initialize_TCA(){
-	// Prescaler = 1024
-	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV1024_gc;
-	TCA0.SINGLE.PER = 254; // Select the resolution
-	TCA0.SINGLE.CMP0 = 127; // Select the duty cycle
-	// Select Single_Slope_PWM
-	TCA0.SINGLE.CTRLB |= TCA_SINGLE_WGMODE_SINGLESLOPE_gc;
-	// Enable interrupt overflow
-	TCA0.SINGLE.INTCTRL = TCA_SINGLE_OVF_bm;
-	// Enable interrupt COMP0
-	TCA0.SINGLE.INTCTRL |= TCA_SINGLE_CMP0_bm;
-	TCA0.SINGLE.CTRLA |= TCA_SINGLE_ENABLE_bm; // Enable
+void initialize_TCA(int period){
+	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV1024_gc;	// Prescaler = 1024
+	TCA0.SINGLE.PER = period;		// Select the resolution
+	TCA0.SINGLE.CMP0 = period/2;	// Select the duty cycle	
+	TCA0.SINGLE.CTRLB |= TCA_SINGLE_WGMODE_SINGLESLOPE_gc;	// Select Single_Slope_PWM
+	TCA0.SINGLE.INTCTRL = TCA_SINGLE_OVF_bm;	// Enable interrupt overflow
+	TCA0.SINGLE.INTCTRL |= TCA_SINGLE_CMP0_bm;	// Enable interrupt COMP0
+	TCA0.SINGLE.CTRLA |= TCA_SINGLE_ENABLE_bm;	// Enable
+}
+
+void initialize_TCB(int period){
+	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV1024_gc;	// Prescaler = 1024
+	TCA0.SINGLE.PER = period;		// Select the resolution
+	TCA0.SINGLE.CMP0 = period/2;	// Select the duty cycle
+	TCA0.SINGLE.CTRLB |= TCA_SINGLE_WGMODE_SINGLESLOPE_gc;	// Select Single_Slope_PWM
+	TCA0.SINGLE.INTCTRL = TCA_SINGLE_OVF_bm;	// Enable interrupt overflow
+	TCA0.SINGLE.INTCTRL |= TCA_SINGLE_CMP0_bm;	// Enable interrupt COMP0
+	TCA0.SINGLE.CTRLA |= TCA_SINGLE_ENABLE_bm;	// Enable
 }
 
 
@@ -79,25 +99,15 @@ void initialize_ADC(){
 	ADC0.CTRLE |= ADC_WINCM0_bm; // Interrupt when Result < WINLT
 }
 
-void turn(int direction){
-	if(turning==1){
-		// Stop turning
-		turning = 0;
-		return;
-	}
-	turning = 1;
-	// Start turning right
-	if(direction==1){
-		
-	}
-	// Start turning left
-	else{
-		
-	}
-}
 
-void stop_moving(){
-	TCA0.SINGLE.CNT = 0;		// Clear counter
-	TCA0.SINGLE.CTRLA = 0;		// Enable
-	PORTD.OUT |= standby_led;	// Stop moving
+
+
+int main(){
+	PORTD.DIR |= PIN1_bm;	// PIN is output
+	initialize_TCA(STD_PER);		// Initialize TCA0 for PWM mode
+	initialize_ADC();		// Initialize ADC for Free Running Mode
+	sei();
+	PORTD.OUT = 7;
+	while(1){
+	}
 }
