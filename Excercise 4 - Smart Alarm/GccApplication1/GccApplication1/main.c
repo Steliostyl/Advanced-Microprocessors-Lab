@@ -3,11 +3,26 @@
 #include <stdio.h>
 
 #define STD_PER 4
+#define duration 1
 
 int wrong_pwd = 0;
-int pwd_digit = 0;
+int pwd_digit = 1;
+int state = 0;
+int wrong_pwd_count = 0;
+// State 0 = Initial State
+// State 1 = Awaiting for deactivation/Siren is on
 
-void initialize_TCA(int period){
+void initialize_TCA_Timer(int period){
+	TCA0.SINGLE.CNT = 0;								// Clear counter
+	TCA0.SINGLE.CTRLB = 0;								// Normal mode (counter)
+	TCA0.SINGLE.CMP0 = duration;						// When counter reaches this value -> interrupt clock frequency/1024
+	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV1024_gc;	// Frequency of counter
+	TCA0.SINGLE.CTRLA |= 1;								// Enable
+	TCA0.SINGLE.INTCTRL = TCA_SINGLE_CMP0_bm;			// Interrupt Enable for counter
+
+}
+
+void initialize_TCA_PWM(int period){
 	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV64_gc;	// Prescaler = 64
 	TCA0.SINGLE.PER = period;		// Select the resolution
 	TCA0.SINGLE.CMP0 = period/2;	// Select the duty cycle
@@ -15,41 +30,6 @@ void initialize_TCA(int period){
 	TCA0.SINGLE.INTCTRL = TCA_SINGLE_OVF_bm;	// Enable interrupt overflow
 	TCA0.SINGLE.INTCTRL |= TCA_SINGLE_CMP0_bm;	// Enable interrupt COMP0
 	TCA0.SINGLE.CTRLA |= TCA_SINGLE_ENABLE_bm;	// Enable
-}
-
-void initialize_TCB(int period){
-	/* Enable writing to protected register */
-	CPU_CCP = CCP_IOREG_gc;
-	/* Enable Prescaler and set Prescaler Division to 64 */
-	CLKCTRL.MCLKCTRLB = CLKCTRL_PDIV_64X_gc | CLKCTRL_PEN_bm;
-	
-	/* Enable writing to protected register */
-	CPU_CCP = CCP_IOREG_gc;
-	/* Select 32KHz Internal Ultra Low Power Oscillator (OSCULP32K) */
-	CLKCTRL.MCLKCTRLA = CLKCTRL_CLKSEL_OSCULP32K_gc;
-	
-	
-	/* Load CCMP register with the period and duty cycle of the PWM.
-	
-	Note:
-	TCB turns on PORTB.PIN0 (left wheel) on each rising edge, 
-	stays on for half the period time then turns off again.
-	
-	Therefore, in order for left wheel to move at the same speed
-	as the right wheel, CCMPL+1 must be 4 times period.
-	
-	Since the period of the output pulse is defined by TCBn.CCMPL+1, 
-	the value that must be loaded into the TCBn.CCMPL register is 0xFF.
-	We also want to set CCMPH to 4 times period and therefore we have:*/
-	TCB0.CCMP = 4*period*0x100 | 0xff;
-
-	/* Enable TCB0 and Divide CLK_PER by 2 */
-	TCB0.CTRLA |= TCB_ENABLE_bm;
-	TCB0.CTRLA |= TCB_CLKSEL_CLKDIV2_gc;
-	
-	/* Enable Pin Output and configure TCB in 8-bit PWM mode */
-	TCB0.CTRLB |= TCB_CCMPEN_bm;
-	TCB0.CTRLB |= TCB_CNTMODE_PWM8_gc;
 }
 
 
@@ -69,11 +49,14 @@ void initialize_ADC(){
 // START OF ALARM FUNCTIONS
 
 void activate_alarm(){
-	
+	initialize_TCA_Timer(); // Start timer
 }
 
 void deacvtivate_alarm(){
-	
+	state = 0;
+	// Turn off led 0
+	// Deactivate ADC
+	// Deactivate TCA
 }
 
 // END OF ALARM FUNCTIONS
@@ -82,47 +65,74 @@ void deacvtivate_alarm(){
 ISR(TCA0_OVF_vect){
 	int intflags = TCA0.SINGLE.INTFLAGS;
 	TCA0.SINGLE.INTFLAGS = intflags;
-	
+}
+
+ISR(TCA0_CMP0_vect){
+	TCA0.SINGLE.CTRLA = 0;
+	int intflags = TCA0.SINGLE.INTFLAGS;
+	TCA0.SINGLE.INTFLAGS = intflags;
+	if(state==0){
+		initialize_ADC();
+		state++;
+	}
+	else
+		initialize_TCA_PWM();
 }
 
 // ADC ISR
 ISR(ADC0_WCOMP_vect){
 	int intflags = ADC0.INTFLAGS;
 	ADC0.INTFLAGS = intflags;
+	// Turn on LED0
+	initialize_TCA_Timer();
 }
 
 // Switch ISR
 ISR(PORTF_PORT_vect){
 	int intflags = PORTF.INTFLAGS;
 	PORTF.INTFLAGS = intflags;
-	printf(intflags);
 	// If the ISR is called from SW5
-	if()
-	// and current pwd_digit is not 1
-	// or 2, turn on the wrong_pwd "flag"
-		if(pwd_digit != 1 && pwd_digit != 2)
+	if(intflags==0x20){
+		// and current pwd_digit is not 1
+		// or 2, turn on the wrong_pwd "flag"
+		if(pwd_digit != 2 && pwd_digit != 3)
 			wrong_pwd = 1;
+	}
 	// Otherwise, the ISR is called from SW6
 	else
-		if()
+		if(pwd_digit != 1 && pwd_digit != 4)
 			wrong_pwd = 1;
 	
 	// When the final digit is entered,
-	// if it's the right digit and the 
-	// wrong_pwd digit "flag" hasn't 
+	// if it's the right digit and the
+	// wrong_pwd digit "flag" hasn't
 	// been activated, then the pwd is
 	// correct.
 	
-	if(pwd_digit==3){
-		// PWD entered successfully
-		// 
-		pwd_digit = 0;
+	if(pwd_digit==4){
+		if(wrong_pwd != 1){
+			// PWD entered successfully
+			wrong_pwd_count = 0;
+			if(state==0)
+				initialize_TCA_Timer();
+			else
+				deacvtivate_alarm();
+		}
+		else{
+			wrong_pwd_count ++;
+			if(state==1 && wrong_pwd_count==3)
+				initialize_TCA_PWM();
+		}
+		pwd_digit = 1;
 	}
 	else pwd_digit++;
 }
 
 int main(){
-	sei();						// Enable interrupts
+	PORTF.PIN5CTRL |= PORT_PULLUPEN_bm | PORT_ISC_BOTHEDGES_gc; //Select pin 5
+	PORTF.PIN6CTRL |= PORT_PULLUPEN_bm | PORT_ISC_BOTHEDGES_gc; //select pin 6
+	
+	sei();	// Enable interrupts
 	
 	while(1){
 		printf("Waiting for input...");
