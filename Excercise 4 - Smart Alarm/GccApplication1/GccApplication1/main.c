@@ -12,7 +12,7 @@ int wrong_pwd_count = 0;
 // State 0 = Initial State
 // State 1 = Awaiting for deactivation/Siren is on
 
-void initialize_TCA_Timer(int period){
+void initialize_TCA_Timer(){
 	TCA0.SINGLE.CNT = 0;								// Clear counter
 	TCA0.SINGLE.CTRLB = 0;								// Normal mode (counter)
 	TCA0.SINGLE.CMP0 = duration;						// When counter reaches this value -> interrupt clock frequency/1024
@@ -22,10 +22,10 @@ void initialize_TCA_Timer(int period){
 
 }
 
-void initialize_TCA_PWM(int period){
+void initialize_TCA_PWM(){
 	TCA0.SINGLE.CTRLA = TCA_SINGLE_CLKSEL_DIV64_gc;	// Prescaler = 64
-	TCA0.SINGLE.PER = period;		// Select the resolution
-	TCA0.SINGLE.CMP0 = period/2;	// Select the duty cycle
+	TCA0.SINGLE.PER = STD_PER;		// Select the resolution
+	TCA0.SINGLE.CMP0 = STD_PER/2;	// Select the duty cycle
 	TCA0.SINGLE.CTRLB |= TCA_SINGLE_WGMODE_SINGLESLOPE_gc;	// Select Single_Slope_PWM
 	TCA0.SINGLE.INTCTRL = TCA_SINGLE_OVF_bm;	// Enable interrupt overflow
 	TCA0.SINGLE.INTCTRL |= TCA_SINGLE_CMP0_bm;	// Enable interrupt COMP0
@@ -44,27 +44,23 @@ void initialize_ADC(){
 	ADC0.WINLT |= 24; // Set threshold
 	ADC0.INTCTRL |= ADC_WCMP_bm; // Enable Interrupts for WCM
 	ADC0.CTRLE |= ADC_WINCM0_bm; // Interrupt when Result < WINLT
+	ADC0.COMMAND |= ADC_STCONV_bm;
 }
 
-// START OF ALARM FUNCTIONS
-
-void activate_alarm(){
-	initialize_TCA_Timer(); // Start timer
-}
-
-void deacvtivate_alarm(){
+void deactivate_alarm(){
 	state = 0;
-	// Turn off led 0
-	// Deactivate ADC
-	// Deactivate TCA
+	
+	PORTD.OUTCLR = 1;		// Turn off led 0
+	ADC0.CTRLA = 0;			// Deactivate ADC
+	TCA0.SINGLE.CTRLA = 0;	// Deactivate TCA
+	TCA0.SINGLE.INTCTRL = 0;
 }
-
-// END OF ALARM FUNCTIONS
 
 // TCA0 Overflow ISR
 ISR(TCA0_OVF_vect){
 	int intflags = TCA0.SINGLE.INTFLAGS;
 	TCA0.SINGLE.INTFLAGS = intflags;
+	PORTD.OUTSET = 1;// Turn off led 0
 }
 
 ISR(TCA0_CMP0_vect){
@@ -92,7 +88,7 @@ ISR(PORTF_PORT_vect){
 	int intflags = PORTF.INTFLAGS;
 	PORTF.INTFLAGS = intflags;
 	// If the ISR is called from SW5
-	if(intflags==0x20){
+	if(intflags == 0x20){
 		// and current pwd_digit is not 1
 		// or 2, turn on the wrong_pwd "flag"
 		if(pwd_digit != 2 && pwd_digit != 3)
@@ -116,7 +112,7 @@ ISR(PORTF_PORT_vect){
 			if(state==0)
 				initialize_TCA_Timer();
 			else
-				deacvtivate_alarm();
+				deactivate_alarm();
 		}
 		else{
 			wrong_pwd_count ++;
